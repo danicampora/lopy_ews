@@ -1,4 +1,3 @@
-import os
 import time
 import machine
 import json
@@ -7,7 +6,14 @@ from machine import Pin
 from network import LoRa
 import Adafruit_LCD as LCD
 
-LORA_SEND_PERIOD_MS = 3000
+LORA_SEND_PERIOD_MS = const(2500)
+
+# Bike Constants (note that DISTANCE_TARGET is in meters)
+COUNTDOWN_LENGTH = 3
+RIDE_COMPLETE_DELAY = 5
+BIKE_NAME = "1"
+DISTANCE_TARGET = 500
+DISTANCE_PER_REVOLUTION = 2.1362 
 
 class PulseCounter:
     def __init__(self, pin, pull, trigger, debounce_ms):
@@ -24,20 +30,95 @@ class PulseCounter:
             self._last_count_ms = time_ms
 
 
+class Rider:
+    def __init__(self, lcd):
+        global DISTANCE_TARGET
+        self.distance_travelled = 0
+        self.last_distance = 0
+        self.speed = 0
+        self.distance_remaining = DISTANCE_TARGET
+        self.starttime = 0
+        self.lcd = lcd
+
+    def countdown(self):
+        global COUNTDOWN_LENGTH
+        count_down = COUNTDOWN_LENGTH
+        self.lcd.clear()
+        while(count_down > 0):
+            print("Ready in " + str(count_down))
+            self.lcd.home()
+            self.lcd.message("Ready in\n {:2d}".format(count_down))
+            count_down -= 1
+            time.sleep_ms(1000)
+        print("GO! GO! GO!")
+        self.lcd.clear()
+        self.lcd.message("GO! GO! \nGO!")
+        self.starttime = time.ticks_ms() / 1000
+
+    def ride(self, crank):
+        global DISTANCE_TARGET
+        if self.distance_travelled <= DISTANCE_TARGET:
+            # Pull the crank values and calculate the wheel rotations 
+            crank_counter_local = str(crank.counter // 2)
+            wheel_counter_local_calc = (crank.counter // 2) * 2.8 
+            wheel_counter_local = str(wheel_counter_local_calc)
+                
+            # Workout distance travelled from previous loop
+            last_distance_travelled = self.distance_travelled
+            calc_current_timestamp = time.ticks_ms() / 1000
+            current_timestamp = str(time.ticks_ms() / 1000)
+
+            # Workout the Distance Travelled and covert from meters per second to miles per hour
+            self.distance_travelled = (wheel_counter_local_calc * DISTANCE_PER_REVOLUTION) * 2.2237
+            distance_loop = self.distance_travelled - last_distance_travelled
+            self.speed = (self.distance_travelled / (calc_current_timestamp - self.starttime)) 
+            self.distance_remaining = DISTANCE_TARGET - self.distance_travelled
+            print("Wheel Counter: " + str(wheel_counter_local_calc) + " | Average Speed (miles per hour): " + str(self.speed) + " | Distance Remaining (meters): " + str(self.distance_remaining)) 
+
+            # Write out speed and distance left to LCD display 
+            self.lcd.clear()
+            self.lcd.message("AMPH:" + str(int(self.speed)) + "\nMtrs:" + str(int(self.distance_remaining)))
+
+            # this is sent by the gateway
+            #json_str = '{"RiderName":"'+rider_name+'","Company":"'+company+'","BadgeNumber":'+badge_number+',"EventID":"'+event_id+'","RideTimestamp":'+start_timestamp+',"BikeID":'+bike_id+',"RideStatus":"'
+            #+rider_status+'","RideInfo":[{"CounterTimestamp":'+current_timestamp+',"CrankCounter":'+crank_counter_local+',"WheelCounter":'+wheel_counter_local+'}]}'
+            #json_reading = json.loads(json_str)     
+            # print(json_reading)
+            # TODO: Publish json_reading to TOPIC, QOS
+            
+            return False
+        else:
+            return True
+
+    def distance(self):
+        return self.distance_remaining
+
+    def speed(self):
+        return self.speed
+
+    def finish(self):
+        global RIDE_COMPLETE_DELAY
+        count_down = RIDE_COMPLETE_DELAY
+        print("Ride Complete!")
+        self.lcd.clear()
+        self.lcd.message("Ride Com\nplete!")
+        while(count_down > 0):
+          count_down -= 1
+          time.sleep_ms(1000)
+
+
 def main():
-    _prev_crank = 0
-    _prev_wheel = 0
-    _time_ms = time.ticks_ms()
-    _last_sent_ms = _time_ms
+    time_ms = time.ticks_ms()
+    last_sent_ms = time_ms
+    state = 'IDLE'   # States are: 'IDLE', 'RUNNING', 'FINISHED'
 
-    # init the crank and wheel pulse counters
-    crank = PulseCounter('G10', Pin.PULL_DOWN, Pin.IRQ_RISING, 250)
-    #Pin('G4', mode=Pin.IN, pull=Pin.PULL_DOWN)
-    #wheel = PulseCounter('G5', Pin.PULL_DOWN, Pin.IRQ_RISING, 200)
+    Pin('G4', mode=Pin.IN, pull=Pin.PULL_DOWN)
+    crank = PulseCounter('G5', Pin.PULL_DOWN, Pin.IRQ_RISING, 250)
 
-    _lora = LoRa()
+    # initialize LoRa as a node (with Rx IQ inversion)
+    lora = LoRa(tx_iq=False, rx_iq=True)
 
-    # Raspberry Pi LCD pin configuration:
+    # LCD pin configuration:
     lcd_rs        = 'G11'
     lcd_en        = 'G12'
     lcd_d4        = 'G15'
@@ -49,28 +130,57 @@ def main():
     lcd_rows      = 1
 
     lcd = LCD.CharLCD(lcd_rs, lcd_en, lcd_d4, lcd_d5, lcd_d6, lcd_d7, lcd_columns, lcd_rows)
-    lcd.message('C={:4d}'.format(_prev_crank) + '\nW={:4d}'.format(_prev_wheel))
 
-    _start_delay_ms = ((machine.rng() % 30) * 100) + time.ticks_ms()
+    rider = Rider(lcd)
+
+    print("Ready for first rider.")
+    lcd.clear()
+    lcd.message("Ready fo\nr first rider.")
 
     while True:
-        if (_prev_crank != crank.counter):
-            _prev_crank = crank.counter // 2    # Need to divide by 2 as pulses are duplicated
-            lcd.home()
-            lcd.message('C={:4d}'.format(_prev_crank) + '\nW={:4d}'.format(_prev_wheel))
+        if state == 'IDLE':
+            packet_rx = lora.recv()
+            if packet_rx:
+                parsed_json = json.loads(packet_rx.decode('ascii'))
+                cmd = parsed_json['cm']
+                if cmd == 's':
+                    print('Going to running state')
+                    start_delay_ms = ((machine.rng() % 30) * 100) + time.ticks_ms()
+                    # send 's' (started) state over LoRa
+                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'s'})
+                    lora.send(packet_tx, True)
+                    rider.countdown()
+                    # change to the running state and notify the gateway
+                    state = 'RUNNING'
+                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'r'})
+                    lora.send(packet_tx, True)
+            else:
+                time.sleep_ms(50)
 
-        #if (_prev_wheel != wheel.counter):
-        #    _prev_wheel = wheel.counter
-        #    #lcd.clear()
-        #    lcd.message('C={:4d}'.format(_prev_crank) + '\nW={:4d}'.format(_prev_wheel))
-        
-        _time_ms = time.ticks_ms()
-        if _time_ms < _start_delay_ms:
-            pass
-        elif _time_ms > _last_sent_ms + LORA_SEND_PERIOD_MS:
-            _last_sent_ms = _time_ms
-            _packet = json.dumps({"id": config.id, "c": _prev_crank, "w": _prev_wheel})
-            print(_packet + ' {}'.format(_last_sent_ms))
-            _lora.send(_packet, False)
+        elif state == 'RUNNING':
+            if rider.ride(crank):
+                state = 'FINISHED'
+                packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'f'})
+                lora.send(packet_tx, True)
+            time_ms = time.ticks_ms()
+            if time_ms < start_delay_ms:
+                pass
+            elif time_ms > last_sent_ms + LORA_SEND_PERIOD_MS:
+                last_sent_ms = time_ms
+                packet_tx = json.dumps({'id':config.id, 'cr':crank.counter, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'r'})
+                print(packet_tx + ' {}'.format(last_sent_ms))
+                lora.send(packet_tx, True)
+            else:
+                packet_rx = lora.recv()
+                if packet_rx:
+                    parsed_json = json.loads(packet_rx.decode('ascii'))
+                    # check the packet received and process the commands
 
-        time.sleep_ms(50)
+            time.sleep(1.0 - (((time.ticks_ms() / 1000) - rider.starttime) % 1.0))
+
+        else:
+            rider.finish()
+            # change to the running state and notify the gateway
+            state = 'IDLE'
+            packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'i'})
+            lora.send(packet_tx, True)
