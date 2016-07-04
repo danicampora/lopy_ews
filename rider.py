@@ -42,6 +42,7 @@ class Rider:
 
     def countdown(self):
         global COUNTDOWN_LENGTH
+        global DISTANCE_TARGET
         count_down = COUNTDOWN_LENGTH
         self.lcd.clear()
         while(count_down > 0):
@@ -51,6 +52,7 @@ class Rider:
             count_down -= 1
             time.sleep_ms(1000)
         print("GO! GO! GO!")
+        self.distance_remaining = DISTANCE_TARGET
         self.lcd.clear()
         self.lcd.message("GO! GO! \nGO!")
         self.starttime = time.ticks_ms() / 1000
@@ -93,7 +95,7 @@ class Rider:
     def distance(self):
         return self.distance_remaining
 
-    def speed(self):
+    def avg_speed(self):
         return self.speed
 
     def finish(self):
@@ -143,44 +145,49 @@ def main():
             if packet_rx:
                 parsed_json = json.loads(packet_rx.decode('ascii'))
                 cmd = parsed_json['cm']
-                if cmd == 's':
+                id = parsed_json['id']
+                if cmd == 's' and id == config.id:
                     print('Going to running state')
                     start_delay_ms = ((machine.rng() % 30) * 100) + time.ticks_ms()
                     # send 's' (started) state over LoRa
-                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'s'})
+                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'s'})
                     lora.send(packet_tx, True)
                     rider.countdown()
                     # change to the running state and notify the gateway
                     state = 'RUNNING'
-                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'r'})
+                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'r'})
                     lora.send(packet_tx, True)
             else:
                 time.sleep_ms(50)
 
         elif state == 'RUNNING':
             if rider.ride(crank):
+                print('Going to finished state')
                 state = 'FINISHED'
-                packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'f'})
+                packet_tx = json.dumps({'id': config.id, 'cr':crank.counter, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'f'})
                 lora.send(packet_tx, True)
             time_ms = time.ticks_ms()
             if time_ms < start_delay_ms:
                 pass
             elif time_ms > last_sent_ms + LORA_SEND_PERIOD_MS:
                 last_sent_ms = time_ms
-                packet_tx = json.dumps({'id':config.id, 'cr':crank.counter, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'r'})
+                packet_tx = json.dumps({'id':config.id, 'cr':crank.counter, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'r'})
                 print(packet_tx + ' {}'.format(last_sent_ms))
                 lora.send(packet_tx, True)
             else:
+                print('attempt to receive lora')
                 packet_rx = lora.recv()
                 if packet_rx:
+                    print(packet_rx)
                     parsed_json = json.loads(packet_rx.decode('ascii'))
                     # check the packet received and process the commands
 
             time.sleep(1.0 - (((time.ticks_ms() / 1000) - rider.starttime) % 1.0))
 
         else:
+            print('finishing ride')
             rider.finish()
             # change to the running state and notify the gateway
             state = 'IDLE'
-            packet_tx = json.dumps({'id': config.id, 'cr':0, 'wh':0, 'ds':rider.distance(), 'sp':rider.speed(), 'st':'i'})
+            packet_tx = json.dumps({'id': config.id, 'cr':crank.counter, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'i'})
             lora.send(packet_tx, True)

@@ -8,6 +8,7 @@ import json
 TCP_PORT = 50140            # FIXME
 TCP_IP = '10.0.10.2'        # TODO: Needs to be replaced with the actual IP
 
+EAGAIN = const(11)
 
 class Rider:
     def __init__(self, name, company, badge, bike):
@@ -47,6 +48,7 @@ class NanoGateWay:
             self.connected = True
         except Exception:
              self.sock.close() # just close the socket and try again later
+             print('Socket connect failed, retrying...')
              time.sleep_ms(500)
     
     def send(self, msg):
@@ -80,30 +82,36 @@ class NanoGateWay:
             print(data)
             parsed_json = json.loads(data.decode('ascii'))
             print(parsed_json)
-            if parsed_json['RideStatus'] == "initalised":
+            if parsed_json['RideStatus'] == "initialized":
                 self.new_rider(parsed_json['RiderName'], parsed_json['Company'], 
                                parsed_json['BadgeNumber'], parsed_json['BikeID'])
+                # start the race
+                packet_tx = json.dumps({'id':parsed_json['BikeID'], 'cm': 's'})
+                self.lora.send(packet_tx, True)
+
         lora_d = self.lora.recv()
         if lora_d:
             parsed_json = json.loads(lora_d.decode('ascii'))
-            # update the rider info
+            print(parsed_json)
+            # update the rider info (if the rider already exists)
             bike_id = parsed_json['id']
-            self.riders[bike_id].speed = parsed_json['sp']
-            self.riders[bike_id].distance = parsed_json['ds']
-            self.riders[bike_id].crank = parsed_json['cr']
-            if parsed_json['st'] == 'i' or parsed_json['st'] == 'f':
-                self.riders[bike_id].status = 'finished'
-            elif parsed_json['st'] == 'r':
-                self.riders[bike_id].status = 'counting'
-            else:
-                self.riders[bike_id].status = 'started'
-            # Assemble the TCP packet
-            json_str = '{"RiderName":"'+ self.riders[bike_id].name + '","Company":"' + self.riders[bike_id].company + '","BadgeNumber":' + self.riders[bike_id].badge + \
-                       ',"EventID":"' + 'EVENT_0' + '","RideTimestamp":' + self.riders[bike_id].starttime + ',"BikeID":' + bike_id + \
-                       ',"RideStatus":"' + self.riders[bike_id].status + '","RideInfo":[{"CounterTimestamp":' + (time.ticks_ms() / 1000) + \
-                       ',"CrankCounter":'+ self.riders[bike_id].crank + ',"WheelCounter":' + 'WHEEL' + '}]}'
-            json_d = json.dumps(json_str)
-            self.send(json_d)
+            if bike_id in self.riders:
+                self.riders[bike_id].speed = parsed_json['sp']
+                self.riders[bike_id].distance = parsed_json['ds']
+                self.riders[bike_id].crank = parsed_json['cr']
+                if parsed_json['st'] == 'i' or parsed_json['st'] == 'f':
+                    self.riders[bike_id].status = 'finished'
+                elif parsed_json['st'] == 'r':
+                    self.riders[bike_id].status = 'counting'
+                else:
+                    self.riders[bike_id].status = 'started'
+                # Assemble the TCP packet
+                json_d = {"RiderName":self.riders[bike_id].name, "Company":self.riders[bike_id].company, "BadgeNumber":self.riders[bike_id].badge, \
+                          "EventID":'EVENT_0', "RideTimestamp":self.riders[bike_id].starttime, "BikeID":bike_id, \
+                          "RideStatus":self.riders[bike_id].status, "RideInfo":[{"CounterTimestamp": (time.ticks_ms() / 1000), \
+                          "CrankCounter":self.riders[bike_id].crank, "WheelCounter":'WHEEL'}]}  # TODO Correct the dummy value
+                json_str = json.dumps(json_d)
+                self.send(json_str)
         if not self.connected:
             self.connect_to_wlan()
             self.connect_to_server()
