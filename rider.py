@@ -56,6 +56,9 @@ class Rider:
         self.lcd.clear()
         self.lcd.message("GO! GO! \nGO!")
         self.starttime = time.ticks_ms() / 1000
+        self.last_distance = 0
+        self.speed = 0
+        self.distance_travelled = 0
 
     def ride(self, crank):
         global DISTANCE_TARGET
@@ -155,6 +158,7 @@ def main():
                         packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'s'})
                         lora.send(packet_tx, True)
                         rider.countdown()
+                        crank.counter = 0
                         # change to the running state and notify the gateway
                         state = 'RUNNING'
                         packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'r'})
@@ -198,3 +202,5 @@ def main():
             state = 'IDLE'
             packet_tx = json.dumps({'id': config.id, 'cr':crank.counter, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'i'})
             lora.send(packet_tx, True)
+            crank.counter = 0
+
