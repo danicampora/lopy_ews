@@ -34,6 +34,7 @@ class NanoGateWay:
 
     def connect_to_wlan(self):
         if not self.wlan.isconnected():
+            # TODO: change for the correct credentials here (ssid and password)
             self.wlan.connect(ssid='Pycom_Guest', auth=(None, 'themakersofwipy'), timeout=7000)
             while not self.wlan.isconnected():
                 time.sleep_ms(50)

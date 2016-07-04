@@ -110,6 +110,7 @@ class Rider:
 
 
 def main():
+    start_delay_ms = 0
     time_ms = time.ticks_ms()
     last_sent_ms = time_ms
     state = 'IDLE'   # States are: 'IDLE', 'RUNNING', 'FINISHED'
@@ -143,20 +144,23 @@ def main():
         if state == 'IDLE':
             packet_rx = lora.recv()
             if packet_rx:
-                parsed_json = json.loads(packet_rx.decode('ascii'))
-                cmd = parsed_json['cm']
-                id = parsed_json['id']
-                if cmd == 's' and id == config.id:
-                    print('Going to running state')
-                    start_delay_ms = ((machine.rng() % 30) * 100) + time.ticks_ms()
-                    # send 's' (started) state over LoRa
-                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'s'})
-                    lora.send(packet_tx, True)
-                    rider.countdown()
-                    # change to the running state and notify the gateway
-                    state = 'RUNNING'
-                    packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'r'})
-                    lora.send(packet_tx, True)
+                try:
+                    parsed_json = json.loads(packet_rx.decode('ascii'))
+                    cmd = parsed_json['cm']
+                    id = parsed_json['id']
+                    if cmd == 's' and id == config.id:
+                        print('Going to running state')
+                        start_delay_ms = ((machine.rng() % 30) * 100) + time.ticks_ms()
+                        # send 's' (started) state over LoRa
+                        packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'s'})
+                        lora.send(packet_tx, True)
+                        rider.countdown()
+                        # change to the running state and notify the gateway
+                        state = 'RUNNING'
+                        packet_tx = json.dumps({'id': config.id, 'cr':0, 'ds':int(rider.distance()), 'sp':int(rider.avg_speed()), 'st':'r'})
+                        lora.send(packet_tx, True)
+                except Exception:
+                    print('Corrupted LoRa packet')
             else:
                 time.sleep_ms(50)
 
@@ -179,8 +183,11 @@ def main():
                 packet_rx = lora.recv()
                 if packet_rx:
                     print(packet_rx)
-                    parsed_json = json.loads(packet_rx.decode('ascii'))
-                    # check the packet received and process the commands
+                    try: # I've seen this failing sometimes
+                        parsed_json = json.loads(packet_rx.decode('ascii'))
+                        # check the packet received and process the commands
+                    except Exception:
+                        print('Corrupted LoRa packet')
 
             time.sleep(1.0 - (((time.ticks_ms() / 1000) - rider.starttime) % 1.0))
 
