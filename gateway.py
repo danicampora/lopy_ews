@@ -6,22 +6,23 @@ import time
 import json
 
 TCP_PORT = 50140            # FIXME
-TCP_IP = '10.0.10.2'        # TODO: Needs to be replaced with the actual IP
+TCP_IP = '192.168.10.101'        # TODO: Needs to be replaced with the actual IP
 
 EAGAIN = const(11)
 
 class Rider:
-    def __init__(self, name, company, badge, bike):
+    def __init__(self, name, company, badge, bike, eventid, ridetimestamp):
         self.name = name
         self.company = company
         self.badge = badge
         self.bike = bike
         self.status = 'finished'
+        self.eventid = eventid
         self.speed = 0
         self.distance = 0
         self.crank = 0
         self.starttime = time.ticks_ms() / 1000
-
+        self.ridetimestamp = ridetimestamp
 
 class NanoGateWay:
     def __init__(self):
@@ -35,7 +36,7 @@ class NanoGateWay:
     def connect_to_wlan(self):
         if not self.wlan.isconnected():
             # TODO: change for the correct credentials here (ssid and password)
-            self.wlan.connect(ssid='Pycom_Guest', auth=(None, 'themakersofwipy'), timeout=7000)
+            self.wlan.connect(ssid='KCOMIoT', auth=(None, '10noCHOSun'), timeout=7000)
             while not self.wlan.isconnected():
                 time.sleep_ms(50)
 
@@ -61,8 +62,8 @@ class NanoGateWay:
                 self.sock.close()
                 self.sock = None
 
-    def new_rider(self, name, company, badge, bike):
-        rider = Rider(name, company, badge, bike)
+    def new_rider(self, name, company, badge, bike, eventid, ridetimestamp):
+        rider = Rider(name, company, badge, bike, eventid, ridetimestamp)
         self.riders[bike] = rider
 
     def recv(self):
@@ -83,11 +84,13 @@ class NanoGateWay:
             print(data)
             parsed_json = json.loads(data.decode('ascii'))
             print(parsed_json)
-            if parsed_json['RideStatus'] == "initialized":
+            if parsed_json['RideStatus'] == "started":
                 self.new_rider(parsed_json['RiderName'], parsed_json['Company'], 
-                               parsed_json['BadgeNumber'], parsed_json['BikeID'])
+                               parsed_json['BadgeNumber'], parsed_json['BikeID'],parsed_json['EventID'],parsed_json['RideTimestamp'])
                 # start the race
+                print(str({'id':parsed_json['BikeID'], 'cm': 's'}))
                 packet_tx = json.dumps({'id':parsed_json['BikeID'], 'cm': 's'})
+                print ("packet_tx = " + packet_tx)
                 self.lora.send(packet_tx, True)
 
         lora_d = self.lora.recv()
@@ -107,12 +110,14 @@ class NanoGateWay:
                 else:
                     self.riders[bike_id].status = 'started'
                 # Assemble the TCP packet
+                wheel_count=self.riders[bike_id].crank * 7
                 json_d = {"RiderName":self.riders[bike_id].name, "Company":self.riders[bike_id].company, "BadgeNumber":self.riders[bike_id].badge, \
-                          "EventID":'EVENT_0', "RideTimestamp":self.riders[bike_id].starttime, "BikeID":bike_id, \
-                          "RideStatus":self.riders[bike_id].status, "RideInfo":[{"CounterTimestamp": (time.ticks_ms() / 1000), \
-                          "CrankCounter":self.riders[bike_id].crank, "WheelCounter":'WHEEL'}]}  # TODO Correct the dummy value
+                          "EventID":self.riders[bike_id].eventid, "RideTimestamp":'{:f}'.format(self.riders[bike_id].ridetimestamp), "BikeID":bike_id, \
+                          "RideStatus":self.riders[bike_id].status, "RideInfo":[{"CounterTimestamp": float(time.ticks_ms()), \
+                          "CrankCounter":self.riders[bike_id].crank, "WheelCounter":wheel_count}]}
                 json_str = json.dumps(json_d)
-                self.send(json_str)
+                print("Outgoing from Gateway: " + str(json_str))
+                self.send(json_str+"\n")
         if not self.connected:
             self.connect_to_wlan()
             self.connect_to_server()
